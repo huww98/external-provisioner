@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -456,9 +457,7 @@ func deduplicate(terms []topologyTerm) []topologyTerm {
 // either the primary term (if specified) or term at shiftIndex is the first in the list.
 func sortAndShift(terms []topologyTerm, primary topologyTerm, shiftIndex uint32) []topologyTerm {
 	var preferredTerms []topologyTerm
-	sort.Slice(terms, func(i, j int) bool {
-		return terms[i].less(terms[j])
-	})
+	slices.SortFunc(terms, topologyTerm.compare)
 	if primary == nil {
 		preferredTerms = append(terms[shiftIndex:], terms[:shiftIndex]...)
 	} else {
@@ -545,6 +544,36 @@ func (t topologyTerm) less(other topologyTerm) bool {
 	return t.hash() < other.hash()
 }
 
+func (t topologyTerm) compare(other topologyTerm) int {
+	allKeys := make([]string, 0, len(t)+len(other))
+	for k := range t {
+		allKeys = append(allKeys, k)
+	}
+	for k := range other {
+		allKeys = append(allKeys, k)
+	}
+
+	slices.Sort(allKeys)
+	for _, k := range allKeys {
+		v1, ok1 := t[k]
+		v2, ok2 := other[k]
+		switch {
+		case ok1 && ok2:
+			r := strings.Compare(v1, v2)
+			if r != 0 {
+				return r
+			}
+		case ok1:
+			return 1
+		case ok2:
+			return -1
+		default:
+			panic("unreachable")
+		}
+	}
+	return 0
+}
+
 func (t topologyTerm) subset(other topologyTerm) bool {
 	for key, tv := range t {
 		v, ok := other[key]
@@ -556,12 +585,8 @@ func (t topologyTerm) subset(other topologyTerm) bool {
 	return true
 }
 
-func (t topologyTerm) equal(other topologyTerm) bool {
-	return t.hash() == other.hash()
-}
-
 func toCSITopology(terms []topologyTerm) []*csi.Topology {
-	var out []*csi.Topology
+	out := make([]*csi.Topology, 0, len(terms))
 	for _, term := range terms {
 		out = append(out, &csi.Topology{Segments: term})
 	}

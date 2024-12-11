@@ -18,6 +18,9 @@ package controller
 
 import (
 	"fmt"
+	"maps"
+	"slices"
+	"sort"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -1452,6 +1455,72 @@ func TestPreferredTopologies(t *testing.T) {
 			}
 		})
 	}
+}
+
+func BenchmarkDedupAndSortZone(b *testing.B) {
+	terms := make([]topologyTerm, 0, 3000)
+	for range 1000 {
+		for _, zone := range [...]string{"zone1", "zone2", "zone3"} {
+			terms = append(terms, topologyTerm{
+				"topology.kubernetes.io/region": "some-region",
+				"topology.kubernetes.io/zone":   zone,
+			})
+		}
+	}
+	benchmarkDedupAndSort(b, terms)
+}
+
+func BenchmarkDedupAndSortHost(b *testing.B) {
+	terms := make([]topologyTerm, 0, 3000)
+	for i := range 1000 {
+		for j, zone := range [...]string{"zone1", "zone2", "zone3"} {
+			terms = append(terms, topologyTerm{
+				"topology.kubernetes.io/region": "some-region",
+				"topology.kubernetes.io/zone":   zone,
+				"example.com/instance-id":       fmt.Sprintf("i-%05d", i+j*10000),
+			})
+		}
+	}
+	benchmarkDedupAndSort(b, terms)
+}
+
+func benchmarkDedupAndSort(b *testing.B, terms []topologyTerm) {
+	b.Run("baseline", func(b *testing.B) {
+		for range b.N {
+			terms := slices.Clone(terms)
+			terms = deduplicate(terms)
+			sort.Slice(terms, func(i, j int) bool {
+				return terms[i].less(terms[j])
+			})
+			toCSITopology(terms)
+		}
+	})
+	b.Run("compare", func(b *testing.B) {
+		for range b.N {
+			terms := slices.Clone(terms)
+			terms = deduplicate(terms)
+			sort.Slice(terms, func(i, j int) bool {
+				return terms[i].compare(terms[j]) < 0
+			})
+			toCSITopology(terms)
+		}
+	})
+	b.Run("slices.Sort", func(b *testing.B) {
+		for range b.N {
+			terms := slices.Clone(terms)
+			terms = deduplicate(terms)
+			slices.SortFunc(terms, topologyTerm.compare)
+			toCSITopology(terms)
+		}
+	})
+	b.Run("slices.Compact", func(b *testing.B) {
+		for range b.N {
+			terms := slices.Clone(terms)
+			slices.SortFunc(terms, topologyTerm.compare)
+			terms = slices.CompactFunc(terms, maps.Equal)
+			toCSITopology(terms)
+		}
+	})
 }
 
 func buildNodes(nodeLabels []map[string]string) *v1.NodeList {
